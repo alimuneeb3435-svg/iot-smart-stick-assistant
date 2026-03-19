@@ -44,6 +44,16 @@ def load_llms():
 
 llm, grader_llm = load_llms()
 
+# ── WEB SEARCH (safe wrapper) ─────────────────────────
+def safe_web_search(query: str) -> str:
+    """Try DuckDuckGo search. If it fails, return empty string gracefully."""
+    try:
+        from langchain_community.tools.ddg_search.tool import DuckDuckGoSearchRun
+        search = DuckDuckGoSearchRun()
+        return search.run(query)
+    except Exception:
+        return ""
+
 # ── BUILD OR LOAD VECTOR DATABASE ────────────────────
 @st.cache_resource
 def load_vectorstore():
@@ -51,7 +61,6 @@ def load_vectorstore():
     chroma_path = "./chroma_db"
     pdf_path = "document.pdf"
 
-    # If chroma_db doesn't exist, build it from the PDF
     if not os.path.exists(chroma_path) or not os.listdir(chroma_path):
         st.info("⚙️ Building knowledge base from document... This may take a minute on first run.")
 
@@ -63,8 +72,8 @@ def load_vectorstore():
         pages = loader.load()
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=500,
-            chunk_overlap=100
+            chunk_size=800,
+            chunk_overlap=150
         )
         chunks = splitter.split_documents(pages)
 
@@ -141,6 +150,7 @@ def grader_node(state: AgentState) -> AgentState:
     response = grader_llm.invoke([
         SystemMessage(content="""You are a relevance grader.
 - If the context contains ANY partial information related to the question → say "relevant"
+- Be lenient (not strict)
 - Only say "not_relevant" if completely unrelated
 Reply ONLY: relevant OR not_relevant"""),
         HumanMessage(content=f"Question: {state['question']}\n\nContext:\n{state['context']}")
@@ -150,8 +160,9 @@ Reply ONLY: relevant OR not_relevant"""),
         relevance = "relevant"
     return {**state, "relevance": relevance}
 
+# ── ROUTE AFTER GRADER ────────────────────────────────
 def after_grader(state: AgentState) -> str:
-    return "generator"
+    return "generator" if state["relevance"] == "relevant" else "web_search"
 
 def generator_node(state: AgentState) -> AgentState:
     response = llm.invoke([
@@ -159,15 +170,42 @@ def generator_node(state: AgentState) -> AgentState:
 Rules:
 - Extract the exact answer from the context
 - ALWAYS include specific names/entities if present
+- NEVER replace a specific name with a generic term
 - If the answer is not clearly available, say: This information is not available in the document.
 - Do NOT include contradictory statements."""),
         HumanMessage(content=f"Context:\n{state['context']}\n\nQuestion: {state['question']}")
     ])
     return {**state, "answer": response.content, "source": "document"}
 
+def web_search_node(state: AgentState) -> AgentState:
+    raw_results = safe_web_search(state["question"])
+
+    # If web search failed or returned nothing, say not available
+    if not raw_results.strip():
+        return {
+            **state,
+            "answer":  "This information is not available in the document, and web search is currently unavailable.",
+            "context": "",
+            "source":  "web"
+        }
+
+    response = llm.invoke([
+        SystemMessage(content="You are a helpful assistant. Answer clearly using the search results."),
+        HumanMessage(content=f"Question: {state['question']}\n\nSearch Results:\n{raw_results}")
+    ])
+    return {
+        **state,
+        "answer":  response.content,
+        "context": raw_results,
+        "source":  "web"
+    }
+
 def hallucination_checker_node(state: AgentState) -> AgentState:
+    if state["source"] == "web":
+        return {**state, "hallucination": "supported"}
     if "not available in the document" in state["answer"].lower():
         return {**state, "hallucination": "supported"}
+
     response = grader_llm.invoke([
         SystemMessage(content="""You are a hallucination checker.
 - Verify the answer is fully supported by the context
@@ -199,15 +237,23 @@ def build_agent():
     graph.add_node("retriever",             retriever_node)
     graph.add_node("grader",               grader_node)
     graph.add_node("generator",            generator_node)
+    graph.add_node("web_search",           web_search_node)
     graph.add_node("hallucination_checker", hallucination_checker_node)
     graph.add_node("output",               output_node)
 
     graph.set_entry_point("query_rewriter")
     graph.add_edge("query_rewriter", "retriever")
     graph.add_edge("retriever",      "grader")
-    graph.add_conditional_edges("grader", after_grader, {"generator": "generator"})
-    graph.add_edge("generator",  "hallucination_checker")
-    graph.add_conditional_edges("hallucination_checker", after_hallucination_check, {"output": "output", "generator": "generator"})
+    graph.add_conditional_edges("grader", after_grader, {
+        "generator":  "generator",
+        "web_search": "web_search"
+    })
+    graph.add_edge("web_search",  "hallucination_checker")
+    graph.add_edge("generator",   "hallucination_checker")
+    graph.add_conditional_edges("hallucination_checker", after_hallucination_check, {
+        "output":    "output",
+        "generator": "generator"
+    })
     graph.add_edge("output", END)
     return graph.compile()
 
@@ -222,6 +268,8 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
         if msg.get("source") == "document":
             st.caption("📄 Source: Document")
+        elif msg.get("source") == "web":
+            st.caption("🌐 Source: Web Search")
 
 question = st.chat_input("Ask a question about the IoT Smart Stick...")
 
@@ -244,11 +292,15 @@ if question:
             })
 
         answer = result["answer"]
+        source = result["source"]
         st.markdown(answer)
-        st.caption("📄 Source: Document")
+        if source == "web":
+            st.caption("🌐 Source: Web Search")
+        else:
+            st.caption("📄 Source: Document")
 
     st.session_state.messages.append({
         "role":    "assistant",
         "content": answer,
-        "source":  "document"
+        "source":  source
     })
