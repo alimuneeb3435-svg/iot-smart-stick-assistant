@@ -1,7 +1,7 @@
 import os
 import sys
 import streamlit as st
-st.cache_resource.clear()
+st.cache_resource.clear()  # Clear old cache
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -10,7 +10,6 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
 from dotenv import load_dotenv
@@ -41,10 +40,9 @@ def load_llms():
         model_name="llama-3.3-70b-versatile",
         api_key=os.getenv("GROQ_API_KEY")
     )
-    search = DuckDuckGoSearchRun()
-    return llm, grader_llm, search
+    return llm, grader_llm
 
-llm, grader_llm, search = load_llms()
+llm, grader_llm = load_llms()
 
 # ── LOAD VECTOR DATABASE ──────────────────────────────
 @st.cache_resource
@@ -123,6 +121,7 @@ Reply ONLY: relevant OR not_relevant"""),
         relevance = "relevant"
     return {**state, "relevance": relevance}
 
+# Always go to generator (skip web search)
 def after_grader(state: AgentState) -> str:
     return "generator"
 
@@ -138,18 +137,7 @@ Rules:
     ])
     return {**state, "answer": response.content, "source": "document"}
 
-def web_search_node(state: AgentState) -> AgentState:
-    return {
-        **state,
-        "answer": "Web search is disabled.",
-        "context": "",
-        "source": "web"
-    }
-    
-
 def hallucination_checker_node(state: AgentState) -> AgentState:
-    if state["source"] == "web":
-        return {**state, "hallucination": "supported"}
     if "not available in the document" in state["answer"].lower():
         return {**state, "hallucination": "supported"}
     response = grader_llm.invoke([
@@ -183,14 +171,13 @@ def build_agent():
     graph.add_node("retriever",             retriever_node)
     graph.add_node("grader",               grader_node)
     graph.add_node("generator",            generator_node)
-    graph.add_node("web_search",           web_search_node)
     graph.add_node("hallucination_checker", hallucination_checker_node)
     graph.add_node("output",               output_node)
+
     graph.set_entry_point("query_rewriter")
     graph.add_edge("query_rewriter", "retriever")
     graph.add_edge("retriever",      "grader")
-    graph.add_conditional_edges("grader", after_grader, {"generator": "generator", "web_search": "web_search"})
-    graph.add_edge("web_search", "hallucination_checker")
+    graph.add_conditional_edges("grader", after_grader, {"generator": "generator"})
     graph.add_edge("generator",  "hallucination_checker")
     graph.add_conditional_edges("hallucination_checker", after_hallucination_check, {"output": "output", "generator": "generator"})
     graph.add_edge("output", END)
@@ -203,11 +190,8 @@ if "messages" in st.session_state:
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
-            if "source" in msg:
-                if msg["source"] == "document":
-                    st.caption("📄 Source: Document")
-                else:
-                    st.caption("🌐 Source: Web Search")
+            if "source" in msg and msg["source"] == "document":
+                st.caption("📄 Source: Document")
 else:
     st.session_state.messages = []
 
@@ -232,18 +216,11 @@ if question:
             })
 
         answer = result["answer"]
-        source = result["source"]
-
         st.markdown(answer)
-        if source == "document":
-            st.caption("📄 Source: Document")
-        else:
-            st.caption("🌐 Source: Web Search")
+        st.caption("📄 Source: Document")
 
     st.session_state.messages.append({
         "role":    "assistant",
         "content": answer,
-        "source":  source
+        "source":  "document"
     })
-
-
