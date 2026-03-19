@@ -9,7 +9,7 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.tools.ddg_search.tool import DuckDuckGoSearchRun
+from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
 from dotenv import load_dotenv
