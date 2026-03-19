@@ -1,7 +1,5 @@
 import os
-import sys
 import streamlit as st
-st.cache_resource.clear()  # Clear old cache
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -10,6 +8,8 @@ from langchain_groq import ChatGroq
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_community.vectorstores import Chroma
 from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langgraph.graph import StateGraph, END
 from typing import TypedDict
 from dotenv import load_dotenv
@@ -44,14 +44,43 @@ def load_llms():
 
 llm, grader_llm = load_llms()
 
-# ── LOAD VECTOR DATABASE ──────────────────────────────
+# ── BUILD OR LOAD VECTOR DATABASE ────────────────────
 @st.cache_resource
 def load_vectorstore():
     embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
-    vectorstore = Chroma(
-        persist_directory="./chroma_db",
-        embedding_function=embeddings
-    )
+    chroma_path = "./chroma_db"
+    pdf_path = "document.pdf"
+
+    # If chroma_db doesn't exist, build it from the PDF
+    if not os.path.exists(chroma_path) or not os.listdir(chroma_path):
+        st.info("⚙️ Building knowledge base from document... This may take a minute on first run.")
+
+        if not os.path.exists(pdf_path):
+            st.error(f"❌ '{pdf_path}' not found in the repo. Please push your PDF to GitHub.")
+            st.stop()
+
+        loader = PyPDFLoader(pdf_path)
+        pages = loader.load()
+
+        splitter = RecursiveCharacterTextSplitter(
+            chunk_size=500,
+            chunk_overlap=100
+        )
+        chunks = splitter.split_documents(pages)
+
+        vectorstore = Chroma.from_documents(
+            documents=chunks,
+            embedding=embeddings,
+            persist_directory=chroma_path
+        )
+        vectorstore.persist()
+        st.success("✅ Knowledge base built successfully!")
+    else:
+        vectorstore = Chroma(
+            persist_directory=chroma_path,
+            embedding_function=embeddings
+        )
+
     retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
     return retriever
 
@@ -121,7 +150,6 @@ Reply ONLY: relevant OR not_relevant"""),
         relevance = "relevant"
     return {**state, "relevance": relevance}
 
-# Always go to generator (skip web search)
 def after_grader(state: AgentState) -> str:
     return "generator"
 
@@ -186,14 +214,14 @@ def build_agent():
 agent = build_agent()
 
 # ── CHAT INTERFACE ────────────────────────────────────
-if "messages" in st.session_state:
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            if "source" in msg and msg["source"] == "document":
-                st.caption("📄 Source: Document")
-else:
+if "messages" not in st.session_state:
     st.session_state.messages = []
+
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+        if msg.get("source") == "document":
+            st.caption("📄 Source: Document")
 
 question = st.chat_input("Ask a question about the IoT Smart Stick...")
 
