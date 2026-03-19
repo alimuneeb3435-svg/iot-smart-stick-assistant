@@ -7,5 +7,6 @@ chromadb
 sentence-transformers
 pypdf
 python-dotenv
+duckduckgo-search>=6.0.0
 duckduckgo-search
 streamlit
