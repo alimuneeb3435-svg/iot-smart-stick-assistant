@@ -10,3 +10,5 @@ python-dotenv
 duckduckgo-search
 streamlit
 torch
+langchain
+tiktoken
