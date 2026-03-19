@@ -8,6 +8,5 @@ chromadb
 sentence-transformers
 pypdf
 python-dotenv
-duckduckgo-search==6.1.0
 tiktoken
 torch
