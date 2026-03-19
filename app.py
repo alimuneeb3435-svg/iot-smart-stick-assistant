@@ -123,7 +123,7 @@ Reply ONLY: relevant OR not_relevant"""),
     return {**state, "relevance": relevance}
 
 def after_grader(state: AgentState) -> str:
-    return "generator" if state["relevance"] == "relevant" else "web_search"
+    return "generator"
 
 def generator_node(state: AgentState) -> AgentState:
     response = llm.invoke([
