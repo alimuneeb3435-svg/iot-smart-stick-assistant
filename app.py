@@ -1,6 +1,7 @@
 import os
 import sys
 import streamlit as st
+st.cache_resource.clear()
 
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -138,12 +139,13 @@ Rules:
     return {**state, "answer": response.content, "source": "document"}
 
 def web_search_node(state: AgentState) -> AgentState:
-    raw_results = search.run(state["question"])
-    response = llm.invoke([
-        SystemMessage(content="You are a helpful assistant. Answer clearly using the search results."),
-        HumanMessage(content=f"Question: {state['question']}\n\nSearch Results:\n{raw_results}")
-    ])
-    return {**state, "answer": response.content, "context": raw_results, "source": "web"}
+    return {
+        **state,
+        "answer": "Web search is disabled.",
+        "context": "",
+        "source": "web"
+    }
+    
 
 def hallucination_checker_node(state: AgentState) -> AgentState:
     if state["source"] == "web":
